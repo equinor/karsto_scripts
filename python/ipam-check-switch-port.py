@@ -16,6 +16,9 @@ def main():
     token = args.t
     interactive = args.i
     autoupdate = args.a
+
+    if (autoupdate and input("Are you sure you want to automatically update IPAM? (yes,NO) ").lower() != 'yes'):
+        quit()
     #quit()
 
     # Exported ports list from HiVision
