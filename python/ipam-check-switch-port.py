@@ -124,7 +124,6 @@ def main():
                 device_vlans = device_port["VLANs"].split(',')
                 if (device_vlans[0] == ''):
                     device_vlans = []
-                    print(f'{d} port {device_port["Port"]}: No device VLANS')
                 device_untagged_vlan = None
                 device_tagged_vlan = []
                 for vlan in device_vlans:
@@ -135,20 +134,40 @@ def main():
                 ipam_tagged_vlan = []
                 for vlan in i["tagged_vlans"]:
                     ipam_tagged_vlan.append(vlan["vid"])
+
+                tagged_vlan_diff = False
                 for vlan in device_tagged_vlan:
                     if (not vlan in ipam_tagged_vlan):
-                        print(f'{d} port {device_port["Port"]}: tagged vlan {device_tagged_vlan} != {ipam_tagged_vlan}')
+                        tagged_vlan_diff = True
                         break
                 for vlan in ipam_tagged_vlan:
                     if (not vlan in device_tagged_vlan):
-                        print(f'{d} port {device_port["Port"]}: tagged vlan {device_tagged_vlan} != {ipam_tagged_vlan}')
+                        tagged_vlan_diff = True
                         break
+                if (tagged_vlan_diff):
+                    print(f'{d} port {device_port["Port"]}: tagged vlan {device_tagged_vlan} != {ipam_tagged_vlan}')
+                    if (autoupdate or (interactive and input("Update IPAM? (y,N) ").lower() == 'y')):
+                        if (len(device_tagged_vlan) > 0):
+                            vlan_id = get_vlanid(device_tagged_vlan, headers)
+                            patch_interface(i["id"], json.dumps({"mode": "tagged", "tagged_vlans": vlan_id}), headers)
+                        else:
+                            patch_interface(i["id"], json.dumps({"mode": "access", "tagged_vlans": []}), headers)
 
-                if (i["untagged_vlan"] and int(device_port["PVID"]) != i["untagged_vlan"]["vid"]):
-                    print(f'{d} port {device_port["Port"]}: port vlan id "{device_port["PVID"]}" != "{i["untagged_vlan"]["vid"]}"')
-                if (i["untagged_vlan"] and device_untagged_vlan != i["untagged_vlan"]["vid"]):
+                untagged_vlan_diff = False
+                if (not i["untagged_vlan"] and not device_untagged_vlan):
+                    pass
+                elif (not i["untagged_vlan"] and device_untagged_vlan):
+                    untagged_vlan_diff = True
+                    print(f'{d} port {device_port["Port"]}: untagged vlan "{device_untagged_vlan}" != "{i["untagged_vlan"]}"')
+                elif (i["untagged_vlan"]["vid"] != device_untagged_vlan):
+                    untagged_vlan_diff = True
                     print(f'{d} port {device_port["Port"]}: untagged vlan "{device_untagged_vlan}" != "{i["untagged_vlan"]["vid"]}"')
-
+                
+                if (untagged_vlan_diff and (autoupdate or (interactive and input("Update IPAM? (y,N) ").lower() == 'y'))):
+                    if (not device_untagged_vlan):
+                        patch_interface(i["id"], json.dumps({"untagged_vlan": None}), headers)
+                    else:
+                        patch_interface(i["id"], json.dumps({"mode": "access", "untagged_vlan": {"vid": device_untagged_vlan}, "tagged_vlans": []}), headers)
 
         except Exception as e:
             print("Exception", device_port, e)
@@ -162,6 +181,31 @@ def patch_interface(id, body, headers):
     if response.code != 200:
         print(f'Patch failed. Code: {response.code}, Reason: {response.reason}')
     conn.close()
+
+def get_vlanid(vlan_vid, headers):
+    params = ""
+    for vid in vlan_vid:
+        params = params + f"vid={vid}&"
+    params = params.rstrip('&')
+
+    conn.request("GET", f"/api/ipam/vlans/?{params}", None, headers)
+    response = conn.getresponse()
+    if response.code != 200:
+        print(
+            f'Connection failed. Code: {response.code}, Reason: {response.reason}')
+    vlan = json.loads(response.read().decode('utf-8'))
+    vlan = vlan["results"]
+    conn.close()
+    vlan_id = []
+    ipam_vid = []
+    for v in vlan:
+        vlan_id.append(v["id"])
+        ipam_vid.append(v["vid"])
+    for v in vlan_vid:
+        if (not v in ipam_vid):
+            print(f"VLAN {v} not found in IPAM")
+            return []
+    return vlan_id
 
 if (__name__ == "__main__"):
     main()
