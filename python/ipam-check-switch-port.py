@@ -65,20 +65,19 @@ def main():
                 print(
                     f'Connection failed. Code: {response.code}, Reason: {response.reason}')
                 quit()
-            data = response.read().decode('utf-8')
+            address = json.loads(response.read().decode('utf-8'))
             conn.close()
 
-            # print(data)
-            data = json.loads(data)
-            if data["count"] < 1:
+            # print(address)
+            if address["count"] < 1:
                 print("IP address not found in IPAM", d)
                 continue
 
-            if data["count"] > 1:
+            if address["count"] > 1:
                 print("More than one IP found in IPAM", d)
                 continue
 
-            device_id = data["results"][0]["assigned_object"]["device"]["id"]
+            device_id = address["results"][0]["assigned_object"]["device"]["id"]
             params = urllib.parse.urlencode({
                 'device_id': device_id
             })
@@ -91,14 +90,14 @@ def main():
                 print(
                     f'Connection failed. Code: {response.code}, Reason: {response.reason}')
                 quit()
-            data = json.loads(response.read().decode('utf-8'))
+            interface = json.loads(response.read().decode('utf-8'))
             conn.close()
 
-            if (data["count"] != len(devices[d])):
+            if (interface["count"] != len(devices[d])):
                 print("Number of interfaces does not match", d)
                 continue
 
-            for i in data["results"]:
+            for i in interface["results"]:
                 device_port = None
                 for p in devices[d]:
                     if (p["Port"] == i["name"]):
