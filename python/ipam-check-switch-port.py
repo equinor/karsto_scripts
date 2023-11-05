@@ -118,7 +118,7 @@ def main():
                 device_port_enabled = device_port["Port Enabled"] == 'Yes'
                 if (device_port_enabled != i["enabled"]):
                     print(f'{d} port {device_port["Port"]}: port enabled "{device_port["Port Enabled"]}" != "{i["enabled"]}"')
-                    if (interactive and input("Update IPAM? (y,N) ").lower() == 'y'):
+                    if (autoupdate or (interactive and input("Update IPAM? (y,N) ").lower() == 'y')):
                         patch_interface(i["id"], json.dumps({"enabled": device_port_enabled}), headers)
 
                 device_vlans = device_port["VLANs"].split(',')
