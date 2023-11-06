@@ -22,30 +22,70 @@ def main():
     #quit()
 
     # Exported ports list from HiVision
-    file_path = "switch_ports.csv"
+    ports_path = "switch_ports.csv"
+    # Exported devices list from HiVision
+    devices_path = "switch_devices.csv"
+    # Exported QR codes list from HiVision
+    qr_code_path = "switch_qr_code.csv"
 
-    devices = {}
-    with open(file=file_path, mode='r') as file:
+    ports = {}
+    with open(file=ports_path, mode='r') as file:
         firstline = True
         keys = []
 
-        for l in file.readlines():
+        for l in file.readlines()[3:]:
             if firstline:
                 # read keys from first line
                 firstline = False
-                keys = l.replace('"', '').split(';')
+                keys = l.replace('"', '').rstrip().split(';')
                 continue
 
             values = l.replace('"', '').split(';')
             ipam_port = {}
             for k in range(len(keys)):
-                ipam_port[keys[k]] = values[k].strip('"')
+                ipam_port[keys[k]] = values[k].strip('"').rstrip()
 
-            if (not ipam_port["Device"] in devices.keys()):
-                devices[ipam_port["Device"]] = []
+            if (not ipam_port["Device"] in ports.keys()):
+                ports[ipam_port["Device"]] = []
 
-            devices[ipam_port["Device"]].append(ipam_port.copy())
+            ports[ipam_port["Device"]].append(ipam_port.copy())
 
+    devices = {}
+    with open(file=devices_path, mode='r') as file:
+        firstline = True
+        keys = []
+
+        for l in file.readlines()[3:]:
+            if firstline:
+                # read keys from first line
+                firstline = False
+                keys = l.replace('"', '').rstrip().split(';')
+                continue
+
+            values = l.replace('"', '').split(';')
+            device = {}
+            for k in range(len(keys)):
+                device[keys[k]] = values[k].strip('"').rstrip()
+
+            devices[device["IP Address"]] = device.copy()
+
+    with open(file=qr_code_path, mode='r') as file:
+        firstline = True
+        keys = []
+
+        for l in file.readlines()[3:]:
+            if firstline:
+                # read keys from first line
+                firstline = False
+                keys = l.replace('"', '').rstrip().split(';')
+                continue
+
+            values = l.replace('"', '').split(';')
+            device = {}
+            for k in range(len(keys)):
+                device[keys[k]] = values[k].strip('"').rstrip()
+
+            devices[device["IP Address"]]["QR Code"] = device["Value"]
 
     headers = {
         # Request headers
@@ -54,7 +94,7 @@ def main():
         'Content-Type': 'application/json',
     }
 
-    for d in devices:
+    for d in ports:
         params = urllib.parse.urlencode({
             'address': d
         })
@@ -96,13 +136,13 @@ def main():
             interface = json.loads(response.read().decode('utf-8'))
             conn.close()
 
-            if (interface["count"] != len(devices[d])):
+            if (interface["count"] != len(ports[d])):
                 print("Number of interfaces does not match", d)
                 continue
 
             for i in interface["results"]:
                 device_port = None
-                for p in devices[d]:
+                for p in ports[d]:
                     if (p["Port"] == i["name"]):
                         device_port = p
                         continue
