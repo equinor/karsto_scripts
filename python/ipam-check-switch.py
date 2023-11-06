@@ -110,7 +110,7 @@ def main():
                     print("Port not found", i["name"])
                     continue
 
-                if (device_port["Port Name"] != i["description"]):
+                if (device_port["Port Name"].strip() != i["description"]):
                     print(f'{d} port {device_port["Port"]}: description "{device_port["Port Name"]}" != "{i["description"]}"')
                     if (autoupdate or (interactive and input("Update IPAM? (y,N) ").lower() == 'y')):
                         patch_interface(i["id"], json.dumps({"description": f"{device_port['Port Name']}"}), headers)
