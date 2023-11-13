@@ -33,7 +33,7 @@ def main():
         firstline = True
         keys = []
 
-        for l in file.readlines()[3:]:
+        for l in file.readlines()[2:]:
             if firstline:
                 # read keys from first line
                 firstline = False
@@ -68,6 +68,7 @@ def main():
                 device[keys[k]] = values[k].strip('"').rstrip()
 
             devices[device["IP Address"]] = device.copy()
+            devices[device["IP Address"]]["QR Code"] = None
 
     with open(file=qr_code_path, mode='r') as file:
         firstline = True
@@ -85,7 +86,7 @@ def main():
             for k in range(len(keys)):
                 device[keys[k]] = values[k].strip('"').rstrip()
 
-            devices[device["IP Address"]]["QR Code"] = device["Value"]
+            devices[device["IP Address"]]["QR Code"] = device["Value"].split('+')[1]
 
     headers = {
         # Request headers
@@ -94,6 +95,55 @@ def main():
         'Content-Type': 'application/json',
     }
 
+# Check devices
+    for d in devices:
+        device_name = devices[d]["System Name"]
+
+        try:
+            params = urllib.parse.urlencode({
+                'name': device_name
+            })
+            conn.request("GET", f"/api/dcim/devices/?{params}", None, headers)
+            response = conn.getresponse()
+            if response.code != 200:
+                print(
+                    f'Connection failed. Code: {response.code}, Reason: {response.reason}')
+                quit()
+            ipam_device = json.loads(response.read().decode('utf-8'))
+            if (ipam_device["count"] < 1):
+                print("Device not found in IPAM", device_name)
+                continue
+
+            ipam_device = ipam_device["results"][0]
+
+            params = urllib.parse.urlencode({
+                'id': ipam_device["device_type"]["id"]
+            })
+            conn.request("GET", f"/api/dcim/device-types/?{params}", None, headers)
+            response = conn.getresponse()
+            if response.code != 200:
+                print(
+                    f'Connection failed. Code: {response.code}, Reason: {response.reason}')
+                quit()
+            ipam_device_type = json.loads(response.read().decode('utf-8'))["results"][0]
+
+            conn.close()
+        except Exception as e:
+            print("Exception", device_name, e)
+
+
+        if (not ipam_device["rack"]):
+            print(f'{device_name}: un-racked "{devices[d]["Location"]}"')
+        elif (ipam_device["rack"] and devices[d]["Location"].find(ipam_device["rack"]["name"]) < 0):
+            print(f'{device_name}: rack "{devices[d]["Location"]}" != "{ipam_device["rack"]["name"]}"')
+            #if (autoupdate or (interactive and input("Update IPAM? (y,N) ").lower() == 'y')):
+
+        if (devices[d]["QR Code"] != ipam_device_type["part_number"]):
+            print(f'{device_name}: part number "{devices[d]["QR Code"]}" != "{ipam_device_type["part_number"]}"')
+
+
+
+# Check ports and interfaces
     for d in ports:
         params = urllib.parse.urlencode({
             'address': d
