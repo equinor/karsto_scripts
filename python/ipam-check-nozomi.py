@@ -47,9 +47,13 @@ for n in nodes:
 
         try:
             conn.request("GET", "/api/ipam/ip-addresses/?%s" %
-                         params, "{body}", headers)
+                         params, None, headers)
             response = conn.getresponse()
             # print(response.code)
+            if response.code != 200:
+                print(
+                    f'Connection failed. Code: {response.code}, Reason: {response.reason}')
+                quit()
             data = response.read().decode('utf-8')
 
             # print(data)
@@ -71,6 +75,8 @@ for n in nodes:
                         #print("Wrong label ", "Network monitor: " + n["label"], "IPAM:", names)
                         pass
         except Exception as e:
-            print("Exception", n["ip"], n["mac_address"], n["mac_vendor"])
+            print("Exception", n["ip"], n["mac_address"],
+                  n["mac_vendor"], e.__doc__)
 
+print("Nodes: ", len(nodes))
 conn.close()
