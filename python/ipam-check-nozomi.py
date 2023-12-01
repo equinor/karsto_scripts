@@ -1,13 +1,17 @@
-import datetime
+import argparse
 import http.client
 import urllib.request
 import urllib.parse
 import urllib.error
-import base64
 import json
 
 
-file_path = "nodes20230206090538.csv"
+parser = argparse.ArgumentParser()
+parser.add_argument("-t", help='API token', required=True)
+args = parser.parse_args()
+token = args.t
+
+file_path = "nodes.csv"
 nodes = []
 with open(file=file_path, mode='r') as file:
     firstline = True
@@ -29,7 +33,7 @@ with open(file=file_path, mode='r') as file:
 
 headers = {
     # Request headers
-    'Authorization': '***',
+    'Authorization': f'Token {token}',
     'accept': 'application/json',
 }
 
