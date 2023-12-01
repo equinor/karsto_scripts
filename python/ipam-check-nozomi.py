@@ -40,6 +40,8 @@ headers = {
 conn = http.client.HTTPSConnection('karsto-ipam.equinor.com')
 
 for n in nodes:
+    if n["is_broadcast"] == 'true':
+        continue
     if len(n["ip"]) > 2:
         params = urllib.parse.urlencode({
             # Request parameters
