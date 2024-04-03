@@ -8,10 +8,11 @@ import json
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-t", help='API token', required=True)
+parser.add_argument("-f", help='Nodes file', required=True)
 args = parser.parse_args()
 token = args.t
+file_path = args.f
 
-file_path = "nodes.csv"
 nodes = []
 with open(file=file_path, mode='r') as file:
     firstline = True
