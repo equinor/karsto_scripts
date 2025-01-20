@@ -40,6 +40,7 @@ def main():
                 # read keys from first line
                 firstline = False
                 keys = l.replace('"', '').rstrip().split(';')
+                keys = list(map(lambda k: k.strip(), keys))
                 continue
 
             values = l.replace('"', '').split(';')
@@ -62,6 +63,7 @@ def main():
                 # read keys from first line
                 firstline = False
                 keys = l.replace('"', '').rstrip().split(';')
+                keys = list(map(lambda k: k.strip(), keys))
                 continue
 
             values = l.replace('"', '').split(';')
@@ -81,6 +83,7 @@ def main():
                 # read keys from first line
                 firstline = False
                 keys = l.replace('"', '').rstrip().split(';')
+                keys = list(map(lambda k: k.strip(), keys))
                 continue
 
             values = l.replace('"', '').split(';')
@@ -114,7 +117,7 @@ def main():
                 quit()
             ipam_device = json.loads(response.read().decode('utf-8'))
             if (ipam_device["count"] < 1):
-                print("Device not found in IPAM", device_name)
+                print("Device not found in IPAM:", device_name)
                 continue
 
             ipam_device = ipam_device["results"][0]
