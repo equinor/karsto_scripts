@@ -623,25 +623,13 @@ def main():
             print(f"Error: {conf_file} is not a valid file or does not exist.")
             return
 
-    if len(args.c) == 1:
-        device = CiscoDevice(config_path=args.c[0], netbox_url=args.u, 
-                        netbox_token=args.t, auto_update=auto_update,
-                        interactive=interactive)
+    devices = [CiscoDevice(config_path=conf_file, netbox_url=args.u, netbox_token=args.t, auto_update=auto_update, interactive=interactive) for conf_file in args.c]
+    for device in devices:
         device.parse_config()
         if verbose:
             device.print_summary()
 
         device.compare_netbox()
-
-
-    else:
-        devices = [CiscoDevice(config_path=conf_file, netbox_url=args.n, netbox_token=args.t, auto_update=auto_update) for conf_file in args.c]
-        for device in devices:
-            device.parse_config()
-            if verbose:
-                device.print_summary()
-
-            device.compare_netbox()
 
 
 
