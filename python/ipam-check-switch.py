@@ -181,7 +181,7 @@ def main():
             params = urllib.parse.urlencode({
                 'device_id': device_id
             })
-            
+
             conn.request("GET", "/api/dcim/interfaces/?%s" %
                             params, None, headers)
             response = conn.getresponse()
@@ -245,7 +245,7 @@ def main():
                     print(f'{d} port {device_port["Port"]}: tagged vlan {device_tagged_vlan} != {ipam_tagged_vlan}')
                     if (autoupdate or (interactive and input("Update IPAM? (y,N) ").lower() == 'y')):
                         if (len(device_tagged_vlan) > 0):
-                            vlan_id = get_vlanid(device_tagged_vlan, headers)
+                            vlan_id = get_vlanid(device_tagged_vlan, device_id, headers)
                             patch_interface(i["id"], json.dumps({"mode": "tagged", "tagged_vlans": vlan_id}), headers)
                         else:
                             patch_interface(i["id"], json.dumps({"mode": "access", "tagged_vlans": []}), headers)
@@ -264,7 +264,8 @@ def main():
                     if (not device_untagged_vlan):
                         patch_interface(i["id"], json.dumps({"untagged_vlan": None}), headers)
                     else:
-                        patch_interface(i["id"], json.dumps({"mode": "access", "untagged_vlan": {"vid": device_untagged_vlan}, "tagged_vlans": []}), headers)
+                        vlan_id = get_vlanid([device_untagged_vlan,], device_id, headers)[0]
+                        patch_interface(i["id"], json.dumps({"mode": "access", "untagged_vlan": {"id": vlan_id}, "tagged_vlans": []}), headers)
 
         except Exception as e:
             print("Exception", device_port, e)
@@ -279,8 +280,8 @@ def patch_interface(id, body, headers):
         print(f'Patch failed. Code: {response.code}, Reason: {response.reason}')
     conn.close()
 
-def get_vlanid(vlan_vid, headers):
-    params = ""
+def get_vlanid(vlan_vid, device_id, headers):
+    params = f"available_on_device={device_id}&"
     for vid in vlan_vid:
         params = params + f"vid={vid}&"
     params = params.rstrip('&')
@@ -300,7 +301,7 @@ def get_vlanid(vlan_vid, headers):
         ipam_vid.append(v["vid"])
     for v in vlan_vid:
         if (not v in ipam_vid):
-            print(f"VLAN {v} not found in IPAM")
+            print(f"VLAN {v} not found in IPAM or not available for device id {device_id}")
             return []
     return vlan_id
 
