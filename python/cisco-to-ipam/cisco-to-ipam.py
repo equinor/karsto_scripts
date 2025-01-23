@@ -466,16 +466,20 @@ class CiscoDevice:
                 except:
                     print("Invalid choice, not a number, please try again.")
                     isNumber = False
+                    counter = 1
 
                 if isNumber and (choice >= 1 and choice <= counter):
-                    vgroup = available_vgroups[counter-1]
+                    vgroup = available_vgroups[choice-1]
                     choosing_vlan_group = False
                     found_available_vgroup = True
                 else:
                     print("Invalid choice, please try again.")
+                    counter = 1
             
             if found_available_vgroup:
                 self.conn.close()
+                print("submitting group name: ", vgroup['name'])
+                print("submitting group name: ", vgroup['id'])
                 self.conn.request("POST", "/api/ipam/vlans/", 
                                             body=json.dumps({"name": v_name, 
                                                             "vid": vid, 
@@ -691,7 +695,7 @@ class CiscoDevice:
             else:
                 print("Failed to fetch devices in IPAM. Exiting....")
                 return
-
+            self.conn.close()
             if ipam_device['count'] < 1:
                 print("Device not found in IPAM", self.hostname)
                 if (self.auto_update or (self.interactive and input("Would you like to add this device to IPAM [y/N]: ").lower() == "y")):
@@ -699,6 +703,9 @@ class CiscoDevice:
                     self.conn.request("GET", f"/api/dcim/devices/?id={self.device_id}", headers=self.headers)
                     response = self.conn.getresponse()
                     self.ipam_device = json.loads(response.read().decode('utf-8'))['results'][0]
+                    self.device_id = self.ipam_device['id']
+                    self.device_site_name = self.ipam_device['site']['name']
+                    self.device_site_id = self.ipam_device['site']['id']
                     self.conn.close()
                 else:
                     return
