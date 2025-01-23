@@ -1,2 +1,1 @@
-ciscoconfparse2
-requests
+ciscoconfparse
