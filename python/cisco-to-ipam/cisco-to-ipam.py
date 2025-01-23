@@ -45,7 +45,8 @@ class CiscoDevice:
 
     def __init__(self, config_path: str, netbox_url: str, netbox_token: str, auto_update: bool, interactive: bool):
         self.config_path = config_path
-        self.netbox_url = netbox_url
+        self.conn = http.client.HTTPConnection(netbox_url)
+        
         self.netbox_token = netbox_token
         self.auto_update = auto_update
         self.interactive = interactive
@@ -55,23 +56,30 @@ class CiscoDevice:
             "accept" : "application/json",
             "Content-Type": "application/json"
         }
+        self.conn.request("GET", "/", None, headers=self.headers)
+        self.conn.close()
 
 
     def parse_config(self):
         print(f"{Colors.BOLD}Parsing configuration: {Colors.CYAN}{self.config_path}{Colors.ENDC}")
         try:
-            parse = CiscoConfParse(self.config_path)
+            parse = CiscoConfParse(self.config_path, factory=True)
         except Exception as e:
             raise Exception(f"Failed to parse config file {self.config_path}: {e}")
 
+        # Hostname
         self.hostname = self._parse_hostname(parse)
         print(f"Host - {Colors.GREEN}{self.hostname}{Colors.ENDC}")
 
+        # Default Gateway
         self.gateway = self._parse_default_gateway(parse)
 
+        # Interfaces
         self.all_SVIs, self.regular_interfaces = self._parse_interfaces(parse)
         self.disabled_interfaces = self._parse_disabled_interfaces(parse)
         self.enabled_interfaces = self._parse_enabled_interfaces(parse)
+        
+        # Remove enabled interfaces from the disable interface list
         to_be_removed = []
         for interface in self.disabled_interfaces:
             for intf_enabled in self.enabled_interfaces:
@@ -86,7 +94,7 @@ class CiscoDevice:
         self.tagged_vlans_intf = self._parse_tagged_interfaces(parse)
         self.untagged_vlans_intf = self._parse_untagged_interfaces(parse)
 
-        # TODO: Add IPs parsing - Limited information from the config
+        # IP Addresses
         self.ip_addresses = self._parse_IP_addr_from_config(parse)
 
     def _parse_hostname(self, parse):
@@ -121,7 +129,7 @@ class CiscoDevice:
             if desc_line:
                 description = desc_line[0].text.strip().split(' ', 1)[1]
             else:
-                description = 'No description'
+                description = ''
             self.description_mapping[int_name.replace("interface ", "")] = description
 
         return all_SVIs, regular_interfaces
@@ -201,10 +209,13 @@ class CiscoDevice:
             return[vlan_list]
 
     def _parse_IP_addr_from_config(self, parse):
+        # Find all IP addresses
         ip_addresses = []
         
+        # Search for 'ip address' in the configuration file (common for interfaces and SVIs)
         ip_commands = parse.find_objects(r"ip address")
         for ip_command in ip_commands:
+            # Extract the IP address and subnet mask from the 'ip address' command
             ip_match = re.search(r"ip address (\d+\.\d+\.\d+\.\d+) (\d+\.\d+\.\d+\.\d+)", ip_command.text)
             if ip_match:
                 ip_addresses.append(ip_match.group(1))  # Add the IP address to the list
@@ -231,15 +242,17 @@ class CiscoDevice:
     
 
     def _check_existence(self, item_type, submitted_item, key, endpoint):
-        response = requests.get(endpoint, headers=self.headers)
-        item_ipam = response.json()
+        self.conn.request("GET", endpoint, headers=self.headers)
+        response = self.conn.getresponse()
+        
+        item_ipam = json.loads(response.read().decode('utf-8'))
         found_item = False
 
         for result in item_ipam['results']:
             if result[key].lower() == submitted_item.lower():
                 found_item = True
                 return result[key]
-        
+        self.conn.close()
         if not found_item:
             print(f"{item_type}: {submitted_item}, does not exists in IPAM. Exiting...")
             quit()
@@ -251,21 +264,24 @@ class CiscoDevice:
         role = input("Device Role: ")
         site = input("Site: ")
         
+        # Check if submitted device type exists
         device_type = self._check_existence(item_type="Device Type", 
                                             submitted_item=device_type, key='model', 
-                                            endpoint=f"{self.netbox_url}/api/dcim/device-types/")
+                                            endpoint="/api/dcim/device-types/")
        
+        # Check if submitted device role exists
         role = self._check_existence(item_type="Device Role", 
                                      submitted_item=role, key='name', 
-                                     endpoint=f"{self.netbox_url}/api/dcim/device-roles/")
+                                     endpoint="/api/dcim/device-roles/")
 
+        # Check if submitted site exists
         site = self._check_existence(item_type="Site", 
                                      submitted_item=site, key='name', 
-                                     endpoint=f"{self.netbox_url}/api/dcim/sites/")
+                                     endpoint="/api/dcim/sites/")
         
 
 
-        endpoint = f"{self.netbox_url}/api/dcim/devices/"
+        endpoint = "/api/dcim/devices/"
         
         device_data = {
             "name": self.hostname,
@@ -273,21 +289,29 @@ class CiscoDevice:
             "role": {"name": role},  
             "site": {"name": site},  
         }
-        response = requests.post(endpoint, json=device_data, headers=self.headers)
+        device_data = json.dumps(device_data)
+        # Send POST request to create device in NetBox
+        self.conn.request("POST", endpoint, body=device_data, headers=self.headers)
+        response = self.conn.getresponse()
+        dev_id = json.loads(response.read().decode('utf-8'))['id']
+        self.conn.close()
         
-        if response.status_code == 201:
+        # Check if the request was successful
+        if response.code == 201:
             print(f"{Colors.CYAN}{self.hostname} {Colors.GREEN}successfully added to IPAM{Colors.ENDC}")
-            return response.json()['id']
+            return dev_id
         else:
-            print(f"Failed to create device in IPAM. Status code: {response.status_code}, Reason: {response.reason}\nResponse: {response.text}")
+            print(f"Failed to create device in IPAM. Status code: {response.code}, Reason: {response.reason}\nResponse: {response.text}")
             quit()
 
     def create_interface_objects(self):
         
+        # Create an Interface object for each interface
         self.interfaces = []
         for intf in self.regular_interfaces:
             self.interfaces.append(Interface(intf))
         
+        # Set disable for shutdown interfaces
         for intf in self.disabled_interfaces:
             for intfo in self.interfaces:
                 if intf == intfo.name:
@@ -311,8 +335,10 @@ class CiscoDevice:
     def _print_table(self, title, head, data):
         print("\n")
         max_lens = [max(len(str(row[i])) for row in [head] + data) for i in range(len(head))]
+        # Calculate total table width including separators and padding
         total_width = sum(max_lens) + (3 * len(head)) + 1
 
+        # Create the title row (centered)
         title_row = f"| {title.center(total_width - 4)} |"
         top_border = "+-" + "-" * (total_width - 4) + "-+"
 
@@ -321,6 +347,7 @@ class CiscoDevice:
         print(title_row)
         print(top_border)
 
+        # Print the table header
         header_row = "| " + " | ".join(f"{head[i]:<{max_lens[i]}}" for i in range(len(head))) + " |"
         separator_row = "+-" + "-+-".join("-" * max_lens[i] for i in range(len(head))) + "-+"
 
@@ -328,6 +355,7 @@ class CiscoDevice:
         print(header_row)
         print(separator_row)
 
+        # Print table rows
         for row in data:
             row_str = "| " + " | ".join(f"{str(row[i]):<{max_lens[i]}}" for i in range(len(row))) + " |"
             print(row_str)
@@ -335,16 +363,19 @@ class CiscoDevice:
         print(separator_row)
     
     def _format_config_ipam(self, var1, var2):
+        # Convert the first variable to a list of strings
         if isinstance(var1, list):
             var1_str_list = [str(x) for x in var1]
         else:
             var1_str_list = [str(var1)]
         
+        # Convert the second variable to a list of strings
         if isinstance(var2, list):
             var2_str_list = [str(x) for x in var2]
         else:
             var2_str_list = [str(var2)]
         
+        # Join the values into comma-separated strings
         result1 = ",".join(var1_str_list)
         result2 = ",".join(var2_str_list)
         
@@ -352,97 +383,196 @@ class CiscoDevice:
     
 
     def _patch_interface(self, intf_id, body):
-        response = requests.patch(f"{self.netbox_url}/api/dcim/interfaces/{intf_id}/", data=body, headers=self.headers)
-        if response.status_code == 200:
+        self.conn.request("PATCH", f"/api/dcim/interfaces/{intf_id}/",body, headers=self.headers)
+        response = self.conn.getresponse()
+        self.conn.close()
+        if response.code == 200:
             print(f"{Colors.GREEN}Successfully updated IPAM{Colors.ENDC}")
 
         else:
             print(response.text)
-            print(f"{Colors.FAIL}Patch failed. Code:{response.status_code}, Reason: {response.reason}{Colors.ENDC}")
+            print(f"{Colors.FAIL}Patch failed. Code:{response.code}, Reason: {response.reason}{Colors.ENDC}")
     
     def _create_vlan(self, vid):
-        response = requests.get(f"{self.netbox_url}/api/ipam/vlans/?vid={vid}", headers=self.headers)
-        if response.json()['count'] != 0:
+        # VLAN-PATCH: Need to create a vlan with correct group which is connected to the same site as the device
+        self.conn.request("GET", f"/api/ipam/vlans/?vid={vid}", headers=self.headers)
+        response = self.conn.getresponse()
+        
+        if json.loads(response.read().decode('utf-8'))['count'] != 0:
             print(f"Cannot create vlan{vid}. It already exists. Check VLAN Groups")
         else: 
             v_name = input("Vlan Name: ")
-            choosing = True
-            while choosing:
+            choosing_status = True
+            while choosing_status:
+                print("")
                 print("Choose an option:")
-                print("1. Active")
-                print("2. Reserved")
-                print("3. Deprecated")
+                print(f"{Colors.GREEN}1{Colors.ENDC}. Active")
+                print(f"{Colors.GREEN}2{Colors.ENDC}. Reserved")
+                print(f"{Colors.GREEN}3{Colors.ENDC}. Deprecated")
                         
                 choice = input("Enter your choice (1-3): ")
 
                 if choice == '1':
-                    choosing = False
+                    choosing_status = False
                     status = "active"
 
                 elif choice == '2':
-                    choosing = False
+                    choosing_status = False
                     status = "reserved"
         
                 elif choice == '3':
-                    choosing = False
+                    choosing_status = False
                     status = "deprecated"
 
                 else:
                     print("Invalid choice, please try again.")
+            self.conn.close()
+            self.conn.request("GET", f"/api/ipam/vlan-groups/?scope_type=dcim.region", headers=self.headers)
+            response = self.conn.getresponse()
+            r = json.loads(response.read().decode('utf-8'))
+            available_vgroups = []
+            if len(r['results']) > 1:
+                for group in r['results']:
+                    available_vgroups.append(
+                        {"id": group['id'],
+                         "name": group['name']}
+                    )
+                found_available_vgroup = True
             
-            response = requests.post(f"{self.netbox_url}/api/ipam/vlans/", 
-                                    data=json.dumps({"name": v_name, "vid": vid, "status": status}), 
-                                    headers=self.headers)
-            if response.status_code == 201:
+            elif len(r) == 1:
+                available_vgroups.append(
+                        {"id": group['id'],
+                         "name": group['name']}
+                    )
+                found_available_vgroup = True
+            else:
+                print(f"{Colors.WARNING}Could not find any VLAN groups for the site  the device is located. Skipping vlan group...")
+                found_available_vgroup = False
+
+            choosing_vlan_group = True
+            counter = 1
+            while found_available_vgroup and choosing_vlan_group:
+                print("")
+                print("Choose a VLAN Group")
+                for group in available_vgroups:
+                    print(f"{Colors.GREEN}{counter}{Colors.ENDC}. {group['name']}")
+                    counter += 1
+                counter -= 1
+                
+                choice = input(f"Enter your choice (1-{counter}): ")
+                try:
+                    choice = int(choice)
+                    isNumber = True
+                except:
+                    print("Invalid choice, not a number, please try again.")
+                    isNumber = False
+
+                if isNumber and (choice >= 1 and choice <= counter):
+                    vgroup = available_vgroups[counter-1]
+                    choosing_vlan_group = False
+                    found_available_vgroup = True
+                else:
+                    print("Invalid choice, please try again.")
+            
+            if found_available_vgroup:
+                self.conn.close()
+                self.conn.request("POST", "/api/ipam/vlans/", 
+                                            body=json.dumps({"name": v_name, 
+                                                            "vid": vid, 
+                                                            "status": status,
+                                                            "group": vgroup['id']}), 
+                                            headers=self.headers)
+            else:
+                self.conn.close()
+                self.conn.request("POST", "/api/ipam/vlans/", 
+                                            body=json.dumps({"name": v_name, 
+                                                            "vid": vid, 
+                                                            "status": status}), 
+                                            headers=self.headers)
+            response = self.conn.getresponse()
+            r = json.loads(response.read().decode('utf-8'))
+            
+            if response.code == 201:
                 print(f"{Colors.GREEN}Successfully updated created VLAN in IPAM{Colors.ENDC}")
+                return r
 
             else:
-                print(f"{Colors.FAIL}VLAN creation failed. Code:{response.status_code}, Reason: {response.reason}{Colors.ENDC}")
-    
+                print(f"{Colors.FAIL}VLAN creation failed. Code:{response.code}, Reason: {response.reason}{Colors.ENDC}")
+
+        self.conn.close()
+
+    def _get_vlan_group_id(self):
+        self.conn.request("GET", f"/api/dcim/sites/?id={self.device_site_id}", headers=self.headers)
+        response = self.conn.getresponse()
+        r = json.loads(response.read().decode('utf-8'))
+        r = r['results'][0]        
+        region_id = r['region']['id']
+        self.conn.close()
+
+        self.conn.request("GET", f"/api/ipam/vlan-groups/?scope_type=dcim.region&scope_id={region_id}", headers=self.headers)
+        response = self.conn.getresponse()
+        r = json.loads(response.read().decode('utf-8'))
+
+        if len(r) == 1:
+            r = r['results'][0]
+            self.conn.close()
+            return r['id']
+        else:
+            return None
+
+
     def _get_vlanid(self, vlan_vid):
-        params = ""
+        vlan_group_id = self._get_vlan_group_id()
+
+        params = f"?group_id={vlan_group_id}&"
         for vid in vlan_vid:
             params = params + f"vid={vid}&"
-        
-        response = requests.get(f"{self.netbox_url}/api/ipam/vlans/?{params}", headers=self.headers)
-        if response.status_code != 200:
-            print(f"{Colors.FAIL} Connection failed. Code: {response.status_code}. Reason: {response.reason}{Colors.ENDC}")
-        
-        response = response.json()
-        vlans = response['results']
 
+        self.conn.request("GET", f"/api/ipam/vlans/?{params}", headers=self.headers)
+        response = self.conn.getresponse()
+        r = json.loads(response.read().decode('utf-8'))
+        self.conn.close()
+
+        
+        if response.code != 200:
+            print(f"{Colors.FAIL} Connection failed. Code: {response.code}. Reason: {response.reason}{Colors.ENDC}")
+        vlans = r['results']
         ipam_vlan_id = []
         ipam_vid = []
+        ipam_vlan = []
 
         for v in vlans:
+            ipam_vlan.append({"id": v['id'], "vid": v['vid']})
             ipam_vlan_id.append(v["id"])
             ipam_vid.append(v["vid"])
-        if not ipam_vlan_id:
-            print("There is no VLAN in ipam instance")
+
+        if len(ipam_vid) != len(set(ipam_vid)): # Checks if there are duplicates in the vid list
+            print("There are multiple VLANS with the same VID")
+
         for v in vlan_vid:
             if not int(v) in ipam_vid:
                 print(f"VLAN{v} not found in IPAM")
                 if (self.auto_update or (self.interactive and input(f"Do you want to create VLAN{v} in IPAM? [y/N]: ").lower() == "y")):
-                    self._create_vlan(v)
-                    ipam_vlan_id = []
-                    ipam_vid = []
-
+                    created_vlan = self._create_vlan(v)
+                    ipam_vlan_id.append(created_vlan["id"])
+                    ipam_vid.append(created_vlan["vid"])
                     for v in vlans:
                         ipam_vlan_id.append(v["id"])
                         ipam_vid.append(v["vid"])
 
-                return []
         return ipam_vlan_id
     
     
     def _iterate_interfaces(self):
         self.create_interface_objects()
         try:
-            response = requests.get(
-                f"{self.netbox_url}/api/dcim/interfaces/?device_id={self.device_id}",
-                headers=self.headers
-            ).json()
-        except requests.RequestException as e:
+            self.conn.request("GET", f"/api/dcim/interfaces/?device_id={self.device_id}",
+                                          headers=self.headers)
+            response = self.conn.getresponse()
+            response = json.loads(response.read().decode('utf-8'))
+            self.conn.close()
+            
+        except Exception as e:
             print(f"Failed to fetch interfaces: {e}")
             return
 
@@ -496,22 +626,32 @@ class CiscoDevice:
                 ipam_untagged_vlan['vid'] = ""
             if config_untagged_vlan != ipam_untagged_vlan['vid']:
                 vid = self._get_vlanid([config_untagged_vlan])
-                self._handle_conflict(
-                    title="Untagged VLAN mismatch",
-                    intf=ipam_intf,
-                    ipam_value=ipam_untagged_vlan['vid'],
-                    config_value=config_untagged_vlan,
-                    patch_data={"mode": "access", "untagged_vlan": {"id": vid[0]}}
-                )
+                print(vid)
+                if len(vid) == 1:
+                    self._handle_conflict(
+                        title="Untagged VLAN mismatch",
+                        intf=ipam_intf,
+                        ipam_value=ipam_untagged_vlan['vid'],
+                        config_value=config_untagged_vlan,
+                        patch_data={"mode": "access", "untagged_vlan": {"id": vid[0]}}
+                    )
+                elif len(vid):
+                    pass
         elif config_tagged_vlans:
             if set(config_tagged_vlans) != set(ipam_tagged_vlans):
-                self._handle_conflict(
-                    title="Tagged VLAN mismatch",
-                    intf=ipam_intf,
-                    ipam_value=ipam_tagged_vlans,
-                    config_value=config_tagged_vlans,
-                    patch_data={"mode": "tagged", "tagged_vlans": self._get_vlanid(config_tagged_vlans)}
-                )
+                # Can not used _handle_conflict since it will try create new vlan before showing diff to user.
+                title="Tagged VLAN mismatch"
+                intf=ipam_intf
+                ipam_value=ipam_tagged_vlans
+                config_value=config_tagged_vlans
+                head = ["Host", "Interface", "Config", "IPAM"]
+                data = [[self.hostname, intf['name'], config_value, ipam_value]]
+                self._print_table(title=title, head=head, data=data)
+                patch_data={"mode": "tagged", "tagged_vlans": self._get_vlanid(config_tagged_vlans)}
+                if self.auto_update or (self.interactive and input("Update IPAM? [y/N]: ").lower() == "y"):
+                    self._patch_interface(intf['id'], json.dumps(patch_data))
+                    print("\n")
+
         else:
             if not (ipam_tagged_vlans == config_tagged_vlans):
                 self._handle_conflict(
@@ -535,24 +675,39 @@ class CiscoDevice:
     def compare_netbox(self):
 
         try:
-            response = requests.get(f"{self.netbox_url}/api/dcim/devices/?name={self.hostname}", headers=self.headers)
+            params = urllib.parse.urlencode({"name": self.hostname})
+            self.conn.request("GET", f"/api/dcim/devices/?{params}", None, self.headers)
+            response = self.conn.getresponse()
             
-            if response.status_code != 200:
-                print(f"{Colors.RED}Get requested failed. {Colors.ENDC}Status code: {response.status_code}.\nReason: {response.reason}")
+            
+            if response.code != 200:
+                r = json.loads(response.read().decode('utf-8'))
+                print(f"{Colors.FAIL}Get requested failed. {Colors.ENDC}Status code: {response.code}. Reason: {response.reason}. Details: {r['detail']}")
                 quit()
 
-            ipam_device = response.json()
+            r = response.read().decode('utf-8')
+            if r.strip():
+                ipam_device = json.loads(r)
+            else:
+                print("Failed to fetch devices in IPAM. Exiting....")
+                return
 
             if ipam_device['count'] < 1:
                 print("Device not found in IPAM", self.hostname)
                 if (self.auto_update or (self.interactive and input("Would you like to add this device to IPAM [y/N]: ").lower() == "y")):
                     self.device_id = self._add_device_to_ipam()
-                    response = requests.get(f"{self.netbox_url}/api/dcim/devices/?id={self.device_id}", headers=self.headers)
-                    self.ipam_device = response.json()['results'][0]
+                    self.conn.request("GET", f"/api/dcim/devices/?id={self.device_id}", headers=self.headers)
+                    response = self.conn.getresponse()
+                    self.ipam_device = json.loads(response.read().decode('utf-8'))['results'][0]
+                    self.conn.close()
+                else:
+                    return
 
             else:
                 self.ipam_device = ipam_device["results"][0]
                 self.device_id = self.ipam_device['id']
+                self.device_site_name = self.ipam_device['site']['name']
+                self.device_site_id = self.ipam_device['site']['id']
 
             self._iterate_interfaces()
 
@@ -561,76 +716,73 @@ class CiscoDevice:
             print(e)
             print("Detailed Error:", repr(e))
             traceback.print_exc()
+        self.conn.close()
 
 def main():
+    # Argument parsing
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-c",
+        "-c", "--config",
         help="The path of config file(s)",
         nargs='+',
         required=True
     )
     parser.add_argument(
-        "-u",
+        "-u", "--url", 
         help="The NetBox URL",
         required=True
     )
+
     parser.add_argument(
-        "-t",
+        "-t", "--token", 
         help="The NetBox API token",
         required=True
     )
 
     parser.add_argument(
-        "-i",
+        "-i", "--interactive",
         help="Interactively prompt for resolution to differences",
         action="store_true"
     )
 
     parser.add_argument(
-        "-a",
-        help="Auto update missing data to ipam",
+        "-a", "--autoupdate", 
+        help="Auto update data to ipam",
         action="store_true"
     )
 
     parser.add_argument(
-        "-v",
+        "-v", "--verbose", 
         help="Verbose - Prints summary and other information",
         action="store_true"
     )
 
     args = parser.parse_args()
 
-    if args.a:
-        auto_update = True
-    else:
-        auto_update = False
-
-
-    if args.i:
-        interactive = True
-    else:
-        interactive = False
-
-    if args.v:
-        verbose = True
-    else:
-        verbose = False
-    
-    for conf_file in args.c:
+    for conf_file in args.config:
         path = Path(conf_file)
         if not path.is_file():
             print(f"Error: {conf_file} is not a valid file or does not exist.")
             return
 
-    devices = [CiscoDevice(config_path=conf_file, netbox_url=args.u, netbox_token=args.t, auto_update=auto_update, interactive=interactive) for conf_file in args.c]
-    for device in devices:
+    if len(args.config) == 1:
+        device = CiscoDevice(config_path=args.config[0], netbox_url=args.url, 
+                        netbox_token=args.token, auto_update=args.autoupdate,
+                        interactive=args.interactive)
         device.parse_config()
-        if verbose:
+        if args.verbose:
             device.print_summary()
 
         device.compare_netbox()
 
+    else:
+        devices = [CiscoDevice(config_path=conf_file, netbox_url=args.url, netbox_token=args.token, auto_update=args.autoupdate) for conf_file in args.c]
+        for device in devices:
+            device.parse_config()
+            if args.verbose:
+                device.print_summary()
+
+            device.compare_netbox()
 
 
 if __name__ == "__main__":
@@ -651,9 +803,12 @@ if __name__ == "__main__":
           """
           )
     try:
-        from ciscoconfparse2 import CiscoConfParse  
+        from ciscoconfparse import CiscoConfParse  
         import json
-        import requests
+        import http.client
+        import urllib.request
+        import urllib.parse
+        import urllib.error
         import argparse
         import traceback
         from pathlib import Path
