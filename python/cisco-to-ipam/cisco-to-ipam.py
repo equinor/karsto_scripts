@@ -478,8 +478,6 @@ class CiscoDevice:
             
             if found_available_vgroup:
                 self.conn.close()
-                print("submitting group name: ", vgroup['name'])
-                print("submitting group name: ", vgroup['id'])
                 self.conn.request("POST", "/api/ipam/vlans/", 
                                             body=json.dumps({"name": v_name, 
                                                             "vid": vid, 
@@ -510,29 +508,68 @@ class CiscoDevice:
         response = self.conn.getresponse()
         r = json.loads(response.read().decode('utf-8'))
         r = r['results'][0]        
-        region_id = r['region']['id']
+        self.region_id = r['region']['id']
+        self.region_name = r['region']['name']
         self.conn.close()
 
-        self.conn.request("GET", f"/api/ipam/vlan-groups/?scope_type=dcim.region&scope_id={region_id}", headers=self.headers)
+        self.conn.request("GET", f"/api/ipam/vlan-groups/?scope_type=dcim.region&scope_id={self.region_id}", headers=self.headers)
         response = self.conn.getresponse()
         r = json.loads(response.read().decode('utf-8'))
-
-        if len(r) == 1:
+        if r['count'] == 1:
             r = r['results'][0]
             self.conn.close()
-            return r['id']
-        else:
-            return None
+            return f"?group_id={r['id']}&"
+        elif r['count'] > 1:
+            vgroup_list = "?"
+            for vg in r['results']:
+                vgroup_list += f"group_id={vg['id']}&"
+            return vgroup_list
 
+    def _clarify_duplicate_vlans(self, vlan_group_id, dup_vlan):
+        self.conn.request("GET", f"/api/ipam/vlans/{vlan_group_id}vid={dup_vlan}", headers=self.headers)
+        response = self.conn.getresponse()
+        r = json.loads(response.read().decode('utf-8'))
+        choosing_vlan = True
+        while choosing_vlan:
+            counter = 1
+            head = ["#", "Name", "Vlan ID", "Vlan Description", "Group", "Region"]
+            data = []
+            counter = 0
+            available_vlan = r['results']
 
+            for result in available_vlan:
+                counter += 1
+                data.append([counter, result['name'], result['vid'], result['description'], result['group']['name'], self.region_name])
+            
+            self._print_table("Multiple VLANS", head=head, data=data)
+            if self.auto_update or (self.interactive and input("Update IPAM? [y/N]: ").lower() == "y"):
+                choice = input(f"Which VLAN do you want to use? [1-{counter}]")
+                try:
+                    choice = int(choice)
+                    isNumber = True
+                except:
+                    print("Invalid choice, not a number, please try again.")
+                    isNumber = False
+                    counter = 1
+                if isNumber and (choice >= 1 and choice <= counter):
+                    vlan = available_vlan[choice-1]
+                    choosing_vlan = False
+
+                    for vl in available_vlan:
+                        if vl is not vlan:
+                            self.ipam_vlan.remove({"id": vlan['id'], "vid": vlan['vid']})
+                            self.ipam_vlan_id.remove(vl["id"])
+            else:
+                choosing_vlan = False
+
+        
     def _get_vlanid(self, vlan_vid):
         vlan_group_id = self._get_vlan_group_id()
 
-        params = f"?group_id={vlan_group_id}&"
+        params = vlan_group_id
         for vid in vlan_vid:
             params = params + f"vid={vid}&"
-
-        self.conn.request("GET", f"/api/ipam/vlans/?{params}", headers=self.headers)
+        self.conn.request("GET", f"/api/ipam/vlans/{params}", headers=self.headers)
         response = self.conn.getresponse()
         r = json.loads(response.read().decode('utf-8'))
         self.conn.close()
@@ -541,32 +578,44 @@ class CiscoDevice:
         if response.code != 200:
             print(f"{Colors.FAIL} Connection failed. Code: {response.code}. Reason: {response.reason}{Colors.ENDC}")
         vlans = r['results']
-        ipam_vlan_id = []
-        ipam_vid = []
-        ipam_vlan = []
+        self.ipam_vlan_id = []
+        self.ipam_vid = []
+        self.ipam_vlan = []
 
         for v in vlans:
-            ipam_vlan.append({"id": v['id'], "vid": v['vid']})
-            ipam_vlan_id.append(v["id"])
-            ipam_vid.append(v["vid"])
+            self.ipam_vlan.append({"id": v['id'], "vid": v['vid']})
+            self.ipam_vlan_id.append(v["id"])
+            self.ipam_vid.append(v["vid"])
 
-        if len(ipam_vid) != len(set(ipam_vid)): # Checks if there are duplicates in the vid list
-            print("There are multiple VLANS with the same VID")
+        if len(self.ipam_vid) != len(set(self.ipam_vid)): # Checks if there are duplicates in the vid list
+            duplicates = list(set([x for x in self.ipam_vid if self.ipam_vid.count(x) > 1]))
+            print(f"\n{Colors.WARNING}Duplicate VLAN IDs {duplicates} found in the same region in IPAM...{Colors.ENDC}")
+            if len(duplicates) > 1:
+                for dup in duplicates:
+                    self._clarify_duplicate_vlans(vlan_group_id=vlan_group_id, dup_vlan=dup)
+            elif len(duplicates) == 1:
+                self._clarify_duplicate_vlans(vlan_group_id=vlan_group_id, dup_vlan=duplicates[0])
+
+                #data=[[result['name'], result['vid'], result['description'], result['group']['name']]]
+                
+            else:
+                print(f"{Colors.FAIL}Failed to give the user to choose which duplicate to used. Removing vlan {duplicates} from patch{Colors.ENDC}")
+            
 
         for v in vlan_vid:
-            if not int(v) in ipam_vid:
+            if  int(v) not in self.ipam_vid:
                 print(f"VLAN{v} not found in IPAM")
                 if (self.auto_update or (self.interactive and input(f"Do you want to create VLAN{v} in IPAM? [y/N]: ").lower() == "y")):
                     created_vlan = self._create_vlan(v)
-                    ipam_vlan_id.append(created_vlan["id"])
-                    ipam_vid.append(created_vlan["vid"])
+                    self.ipam_vlan_id.append(created_vlan["id"])
+                    self.ipam_vid.append(created_vlan["vid"])
                     for v in vlans:
-                        ipam_vlan_id.append(v["id"])
-                        ipam_vid.append(v["vid"])
+                        self.ipam_vlan_id.append(v["id"])
+                        self.ipam_vid.append(v["vid"])
 
-        return ipam_vlan_id
-    
-    
+        return self.ipam_vlan_id
+
+
     def _iterate_interfaces(self):
         self.create_interface_objects()
         try:
@@ -821,16 +870,16 @@ if __name__ == "__main__":
         from pathlib import Path
         import re
     except Exception as e:
-        print(f"""Missing dependencies - {e}\nPlease do the following:
+        print(f"""Missing dependency - {e}\nPlease do the following:
     {Colors.BOLD}For {Colors.GREEN}Linux{Colors.ENDC}:
         python3 -m venv venv
         source venv/bin/activate
-        pip3 install -r requirements.txt OR python3 -m pip install -r requirements.txt
+        pip3 install ciscoconfparse OR python3 -m pip install ciscoconfparse
               
     {Colors.BOLD}For {Colors.CYAN}Windows{Colors.ENDC}:
         python -m venv venv
         .\\venv\Scripts\Activate.ps1
-        pip3 install -r .\\requirements.txt OR python -m pip install -r requirements.txt
+        pip3 install ciscoconfparse OR python -m pip install ciscoconfparse
               """)
         quit()
     main()
