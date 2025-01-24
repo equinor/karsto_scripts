@@ -10,6 +10,10 @@ class Colors:
     UNDERLINE = '\033[4m'
 
 class Interface:
+    '''
+    Represents an interface on an device, contains data such as:
+    name, description, vlan and status.
+    '''
     def __init__ (self, name):
         self.name = name
         self.description = ""
@@ -34,16 +38,19 @@ class Interface:
         print("Status: ", self.status)
 
 class CiscoDevice:
-    """
+    '''
     Represents a Cisco device.
     Parses configuration files to extract details such as:
     - Hostname
     - Default Gateway
     - Interfaces (regular, disabled, tagged/untagged VLANs)
     - VLAN details
-    """
+    '''
 
     def __init__(self, config_path: str, netbox_url: str, netbox_token: str, auto_update: bool, interactive: bool):
+        '''
+        Initializes CiscoDevice object
+        '''
         self.config_path = config_path
         self.conn = http.client.HTTPConnection(netbox_url)
         
@@ -61,6 +68,9 @@ class CiscoDevice:
 
 
     def parse_config(self):
+        '''
+        Parses cisco config file populates variables for later use.
+        '''
         print(f"{Colors.BOLD}Parsing configuration: {Colors.CYAN}{self.config_path}{Colors.ENDC}")
         try:
             parse = CiscoConfParse(self.config_path, factory=True)
@@ -98,7 +108,9 @@ class CiscoDevice:
         self.ip_addresses = self._parse_IP_addr_from_config(parse)
 
     def _parse_hostname(self, parse):
-        """Extracts the hostname."""
+        '''
+        Extracts the hostname.
+        '''
         hostnames = parse.find_objects(r'^hostname')
         hostnames = [obj.text.split()[1] for obj in hostnames]
         if not hostnames:
@@ -108,7 +120,9 @@ class CiscoDevice:
         return hostnames[0]
 
     def _parse_default_gateway(self, parse):
-        """Extracts the default gateway."""
+        '''
+        Extracts the default gateway.
+        '''
         find_gateways = parse.find_objects(r'^ip default-gateway')
         gateways = [obj.text.split()[2] for obj in find_gateways if len(obj.text.split()) > 2]
         if len(gateways) > 1:
@@ -116,7 +130,9 @@ class CiscoDevice:
         return gateways[0] if gateways else "Not Configured"
 
     def _parse_interfaces(self, parse):
-        """Extracts all interfaces and separates SVIs."""
+        '''
+        Extracts all interfaces and separates SVIs.
+        '''
         intf_cmds = parse.find_objects(r'^interface')
         all_interfaces = [obj.text.split()[1] for obj in intf_cmds if len(obj.text.split()) > 1]
         all_SVIs = [intf for intf in all_interfaces if "Vlan" in intf]
@@ -135,17 +151,23 @@ class CiscoDevice:
         return all_SVIs, regular_interfaces
 
     def _parse_disabled_interfaces(self, parse):
-        """Extracts all disabled (shutdown) interfaces."""
+        '''
+        Extracts all disabled (shutdown) interfaces.
+        '''
         shut_intf = parse.find_parent_objects(r'^interface', r'shutdown')
         return [obj.text.split()[1] for obj in shut_intf]
     
     def _parse_enabled_interfaces(self, parse):
-        """Extracts all disabled (shutdown) interfaces."""
+        '''
+        Extracts all disabled (shutdown) interfaces.
+        '''
         shut_intf = parse.find_parent_objects(r'^interface', r'no shutdown')
         return [obj.text.split()[1] for obj in shut_intf]
 
     def _parse_vlans(self, parse):
-        """Extracts all VLANs and builds a mapping of interfaces to VLANs."""
+        '''
+        Extracts all VLANs and builds a mapping of interfaces to VLANs
+        '''
         interfaces = parse.find_objects(r"^interface")
         vlan_mapping = {}
         all_vlans = set()
@@ -185,17 +207,23 @@ class CiscoDevice:
         return sorted(all_vlans), vlan_mapping, tagged_vlans, untagged_vlans
 
     def _parse_tagged_interfaces(self, parse):
-        """Finds interfaces with tagged VLANs (trunk mode)."""
+        '''
+        Finds interfaces with tagged VLANs (trunk mode)
+        '''
         trunk_intf = parse.find_parent_objects(r'^interface', r'switchport trunk encapsulation dot1q')
         return [obj.text.split()[1] for obj in trunk_intf]
 
     def _parse_untagged_interfaces(self, parse):
-        """Finds interfaces with untagged VLANs (access mode)."""
+        '''
+        Finds interfaces with untagged VLANs (access mode).
+        '''
         access_intf = parse.find_parent_objects(r'^interface', r'switchport mode access')
         return [obj.text.split()[1] for obj in access_intf]
 
     def _expand_vlans(self, vlan_list):
-        """Expands VLAN ranges into individual VLAN IDs."""
+        '''
+        Expands VLAN ranges into individual VLAN IDs.
+        '''
         expanded = []
         if len(vlan_list.split(',')) > 1:
             for part in vlan_list.split(','):
@@ -209,6 +237,9 @@ class CiscoDevice:
             return[vlan_list]
 
     def _parse_IP_addr_from_config(self, parse):
+        '''
+        Parses config file to find ip addresses
+        '''
         # Find all IP addresses
         ip_addresses = []
         
@@ -224,6 +255,9 @@ class CiscoDevice:
 
 
     def print_summary(self):
+        '''
+        Prints out all collected data from the config file
+        '''
         print(f"Hostname: {self.hostname}")
         print(f"Default Gateway: {self.gateway}")
         print(f"All SVIs: {self.all_SVIs}")
@@ -242,6 +276,9 @@ class CiscoDevice:
     
 
     def _check_existence(self, item_type, submitted_item, key, endpoint):
+        '''
+        Checks if a given item already exists in IPAM.
+        '''
         self.conn.request("GET", endpoint, headers=self.headers)
         response = self.conn.getresponse()
         
@@ -260,6 +297,10 @@ class CiscoDevice:
 
 
     def _add_device_to_ipam(self):
+        '''
+        Creates a new device in IPAM. It asks the user for device type, device role and site.
+        It then checks if the submitted data exists in IPAM, and if it does, then it will create the device.
+        '''
         device_type = input("Device type: ")
         role = input("Device Role: ")
         site = input("Site: ")
@@ -305,7 +346,10 @@ class CiscoDevice:
             quit()
 
     def create_interface_objects(self):
-        
+        '''
+        Creates instances(objects) of the Interface class.
+        It takes the data found from the given config file and create these objects with the config data
+        '''
         # Create an Interface object for each interface
         self.interfaces = []
         for intf in self.regular_interfaces:
@@ -333,6 +377,10 @@ class CiscoDevice:
                     intfo.set_description(self.description_mapping[intf])
 
     def _print_table(self, title, head, data):
+        ''''
+        Prints the difference table. It automatically sets the size of itself
+        based on the length of the given data, and puts the title, header and data in their correct cell.  
+        '''
         print("\n")
         max_lens = [max(len(str(row[i])) for row in [head] + data) for i in range(len(head))]
         # Calculate total table width including separators and padding
@@ -363,6 +411,10 @@ class CiscoDevice:
         print(separator_row)
     
     def _format_config_ipam(self, var1, var2):
+        '''
+        Formats the lists to strings that will shown in the difference table.
+        Just to make them pretty :)
+        '''
         # Convert the first variable to a list of strings
         if isinstance(var1, list):
             var1_str_list = [str(x) for x in var1]
@@ -383,6 +435,9 @@ class CiscoDevice:
     
 
     def _patch_interface(self, intf_id, body):
+        '''
+        Sends a PATCH request to the IPAM with the given interface ID and body
+        '''
         self.conn.request("PATCH", f"/api/dcim/interfaces/{intf_id}/",body, headers=self.headers)
         response = self.conn.getresponse()
         self.conn.close()
@@ -394,7 +449,13 @@ class CiscoDevice:
             print(f"{Colors.FAIL}Patch failed. Code:{response.code}, Reason: {response.reason}{Colors.ENDC}")
     
     def _create_vlan(self, vid):
-        # VLAN-PATCH: Need to create a vlan with correct group which is connected to the same site as the device
+        '''
+        Creates a VLAN based on the submitted data from the user.
+        The data required from the user is:
+        Name
+        Status
+        VLAN group
+        '''
         self.conn.request("GET", f"/api/ipam/vlans/?vid={vid}", headers=self.headers)
         response = self.conn.getresponse()
         
@@ -504,6 +565,9 @@ class CiscoDevice:
         self.conn.close()
 
     def _get_vlan_group_id(self):
+        '''
+        Finds the all available VLAN groups for given device
+        '''
         self.conn.request("GET", f"/api/dcim/sites/?id={self.device_site_id}", headers=self.headers)
         response = self.conn.getresponse()
         r = json.loads(response.read().decode('utf-8'))
@@ -526,6 +590,10 @@ class CiscoDevice:
             return vgroup_list
 
     def _clarify_duplicate_vlans(self, vlan_group_id, dup_vlan):
+        '''
+        Handles multiple vlans with the same VLAN id in the same region in IPAM.
+        It takes in the vlan group id and the duplicated vlan id
+        '''
         self.conn.request("GET", f"/api/ipam/vlans/{vlan_group_id}vid={dup_vlan}", headers=self.headers)
         response = self.conn.getresponse()
         r = json.loads(response.read().decode('utf-8'))
@@ -564,6 +632,9 @@ class CiscoDevice:
 
         
     def _get_vlanid(self, vlan_vid):
+        '''
+        Fetch the ID of a VLAN ID.
+        '''
         vlan_group_id = self._get_vlan_group_id()
 
         params = vlan_group_id
@@ -595,8 +666,6 @@ class CiscoDevice:
                     self._clarify_duplicate_vlans(vlan_group_id=vlan_group_id, dup_vlan=dup)
             elif len(duplicates) == 1:
                 self._clarify_duplicate_vlans(vlan_group_id=vlan_group_id, dup_vlan=duplicates[0])
-
-                #data=[[result['name'], result['vid'], result['description'], result['group']['name']]]
                 
             else:
                 print(f"{Colors.FAIL}Failed to give the user to choose which duplicate to used. Removing vlan {duplicates} from patch{Colors.ENDC}")
@@ -617,6 +686,9 @@ class CiscoDevice:
 
 
     def _iterate_interfaces(self):
+        '''
+        Iterates over all interfaces. Shows differences between config file and IPAM, and can update IPAM.
+        '''
         self.create_interface_objects()
         try:
             self.conn.request("GET", f"/api/dcim/interfaces/?device_id={self.device_id}",
@@ -647,6 +719,9 @@ class CiscoDevice:
             self._check_and_update_vlans(matched_intf, intf)
 
     def _check_and_update_description(self, config_intf, ipam_intf):
+        '''
+        Checks and updates the description on interface
+        '''
         if config_intf.description != ipam_intf.get('description'):
             self._handle_conflict(
                 title="Conflicting description",
@@ -657,6 +732,9 @@ class CiscoDevice:
             )
 
     def _check_and_update_status(self, config_intf, ipam_intf):
+        '''
+        Checks and updates the status on interface
+        '''
         expected_status = config_intf.status == "Enabled"
         if expected_status != ipam_intf.get('enabled'):
             self._handle_conflict(
@@ -668,6 +746,9 @@ class CiscoDevice:
             )
 
     def _check_and_update_vlans(self, config_intf, ipam_intf):
+        '''
+        Checks and updates the VLANS on interface
+        '''
         config_tagged_vlans = [int(v.strip('T')) for v in config_intf.vlan if v.endswith('T')]
         config_untagged_vlan = next((int(v.strip('U')) for v in config_intf.vlan if v.endswith('U')), None)
         ipam_tagged_vlans = [v['vid'] for v in ipam_intf.get('tagged_vlans', [])]
@@ -679,7 +760,6 @@ class CiscoDevice:
                 ipam_untagged_vlan['vid'] = ""
             if config_untagged_vlan != ipam_untagged_vlan['vid']:
                 vid = self._get_vlanid([config_untagged_vlan])
-                print(vid)
                 if len(vid) == 1:
                     self._handle_conflict(
                         title="Untagged VLAN mismatch",
@@ -692,7 +772,7 @@ class CiscoDevice:
                     pass
         elif config_tagged_vlans:
             if set(config_tagged_vlans) != set(ipam_tagged_vlans):
-                # Can not used _handle_conflict since it will try create new vlan before showing diff to user.
+                # Can not use _handle_conflict since it will try create new vlan before showing diff to user.
                 title="Tagged VLAN mismatch"
                 intf=ipam_intf
                 ipam_value=ipam_tagged_vlans
@@ -716,6 +796,9 @@ class CiscoDevice:
                     )
 
     def _handle_conflict(self, title, intf, ipam_value, config_value, patch_data):
+        '''
+        Handles visualization of differences between config and IPAM. In addition it will update IPAM if wanted.
+        '''
         head = ["Host", "Interface", "Config", "IPAM"]
         data = [[self.hostname, intf['name'], config_value, ipam_value]]
         self._print_table(title=title, head=head, data=data)
@@ -726,7 +809,9 @@ class CiscoDevice:
     
 
     def compare_netbox(self):
-
+        '''
+        Entry point for comparing the config file and IPAM. 
+        '''
         try:
             params = urllib.parse.urlencode({"name": self.hostname})
             self.conn.request("GET", f"/api/dcim/devices/?{params}", None, self.headers)
@@ -809,7 +894,7 @@ def main():
 
     parser.add_argument(
         "-v", "--verbose", 
-        help="Verbose - Prints summary and other information",
+        help="Verbose - Prints summary of extracted data from config file",
         action="store_true"
     )
 
@@ -832,7 +917,7 @@ def main():
         device.compare_netbox()
 
     else:
-        devices = [CiscoDevice(config_path=conf_file, netbox_url=args.url, netbox_token=args.token, auto_update=args.autoupdate) for conf_file in args.c]
+        devices = [CiscoDevice(config_path=conf_file, netbox_url=args.url, netbox_token=args.token, auto_update=args.autoupdate, interactive=args.interactive) for conf_file in args.config]
         for device in devices:
             device.parse_config()
             if args.verbose:
