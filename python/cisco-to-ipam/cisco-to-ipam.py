@@ -440,249 +440,60 @@ class CiscoDevice:
         '''
         self.conn.request("PATCH", f"/api/dcim/interfaces/{intf_id}/",body, headers=self.headers)
         response = self.conn.getresponse()
-        self.conn.close()
+        response_r = response.read()
+        if response_r:
+            r = json.loads(response_r.decode('utf-8'))
+            self.conn.close()
+        else:
+            print(f"{Colors.FAIL}Something wrong happened while trying to patch interface{Colors.ENDC}")
+            self.conn.close()
+            return
+        
         if response.code == 200:
             print(f"{Colors.GREEN}Successfully updated IPAM{Colors.ENDC}")
 
         else:
-            print(response.text)
             print(f"{Colors.FAIL}Patch failed. Code:{response.code}, Reason: {response.reason}{Colors.ENDC}")
-    
-    def _create_vlan(self, vid):
-        '''
-        Creates a VLAN based on the submitted data from the user.
-        The data required from the user is:
-        Name
-        Status
-        VLAN group
-        '''
-        self.conn.request("GET", f"/api/ipam/vlans/?vid={vid}", headers=self.headers)
-        response = self.conn.getresponse()
-        
-        if json.loads(response.read().decode('utf-8'))['count'] != 0:
-            print(f"Cannot create vlan{vid}. It already exists. Check VLAN Groups")
-        else: 
-            v_name = input("Vlan Name: ")
-            choosing_status = True
-            while choosing_status:
-                print("")
-                print("Choose an option:")
-                print(f"{Colors.GREEN}1{Colors.ENDC}. Active")
-                print(f"{Colors.GREEN}2{Colors.ENDC}. Reserved")
-                print(f"{Colors.GREEN}3{Colors.ENDC}. Deprecated")
-                        
-                choice = input("Enter your choice (1-3): ")
+            print(r.text)
 
-                if choice == '1':
-                    choosing_status = False
-                    status = "active"
-
-                elif choice == '2':
-                    choosing_status = False
-                    status = "reserved"
-        
-                elif choice == '3':
-                    choosing_status = False
-                    status = "deprecated"
-
-                else:
-                    print("Invalid choice, please try again.")
-            self.conn.close()
-            self.conn.request("GET", f"/api/ipam/vlan-groups/?scope_type=dcim.region", headers=self.headers)
-            response = self.conn.getresponse()
-            r = json.loads(response.read().decode('utf-8'))
-            available_vgroups = []
-            if len(r['results']) > 1:
-                for group in r['results']:
-                    available_vgroups.append(
-                        {"id": group['id'],
-                         "name": group['name']}
-                    )
-                found_available_vgroup = True
-            
-            elif len(r) == 1:
-                available_vgroups.append(
-                        {"id": group['id'],
-                         "name": group['name']}
-                    )
-                found_available_vgroup = True
-            else:
-                print(f"{Colors.WARNING}Could not find any VLAN groups for the site  the device is located. Skipping vlan group...")
-                found_available_vgroup = False
-
-            choosing_vlan_group = True
-            counter = 1
-            while found_available_vgroup and choosing_vlan_group:
-                print("")
-                print("Choose a VLAN Group")
-                for group in available_vgroups:
-                    print(f"{Colors.GREEN}{counter}{Colors.ENDC}. {group['name']}")
-                    counter += 1
-                counter -= 1
-                
-                choice = input(f"Enter your choice (1-{counter}): ")
-                try:
-                    choice = int(choice)
-                    isNumber = True
-                except:
-                    print("Invalid choice, not a number, please try again.")
-                    isNumber = False
-                    counter = 1
-
-                if isNumber and (choice >= 1 and choice <= counter):
-                    vgroup = available_vgroups[choice-1]
-                    choosing_vlan_group = False
-                    found_available_vgroup = True
-                else:
-                    print("Invalid choice, please try again.")
-                    counter = 1
-            
-            if found_available_vgroup:
-                self.conn.close()
-                self.conn.request("POST", "/api/ipam/vlans/", 
-                                            body=json.dumps({"name": v_name, 
-                                                            "vid": vid, 
-                                                            "status": status,
-                                                            "group": vgroup['id']}), 
-                                            headers=self.headers)
-            else:
-                self.conn.close()
-                self.conn.request("POST", "/api/ipam/vlans/", 
-                                            body=json.dumps({"name": v_name, 
-                                                            "vid": vid, 
-                                                            "status": status}), 
-                                            headers=self.headers)
-            response = self.conn.getresponse()
-            r = json.loads(response.read().decode('utf-8'))
-            
-            if response.code == 201:
-                print(f"{Colors.GREEN}Successfully updated created VLAN in IPAM{Colors.ENDC}")
-                return r
-
-            else:
-                print(f"{Colors.FAIL}VLAN creation failed. Code:{response.code}, Reason: {response.reason}{Colors.ENDC}")
-
-        self.conn.close()
-
-    def _get_vlan_group_id(self):
-        '''
-        Finds the all available VLAN groups for given device
-        '''
-        self.conn.request("GET", f"/api/dcim/sites/?id={self.device_site_id}", headers=self.headers)
-        response = self.conn.getresponse()
-        r = json.loads(response.read().decode('utf-8'))
-        r = r['results'][0]        
-        self.region_id = r['region']['id']
-        self.region_name = r['region']['name']
-        self.conn.close()
-
-        self.conn.request("GET", f"/api/ipam/vlan-groups/?scope_type=dcim.region&scope_id={self.region_id}", headers=self.headers)
-        response = self.conn.getresponse()
-        r = json.loads(response.read().decode('utf-8'))
-        if r['count'] == 1:
-            r = r['results'][0]
-            self.conn.close()
-            return f"?group_id={r['id']}&"
-        elif r['count'] > 1:
-            vgroup_list = "?"
-            for vg in r['results']:
-                vgroup_list += f"group_id={vg['id']}&"
-            return vgroup_list
-
-    def _clarify_duplicate_vlans(self, vlan_group_id, dup_vlan):
-        '''
-        Handles multiple vlans with the same VLAN id in the same region in IPAM.
-        It takes in the vlan group id and the duplicated vlan id
-        '''
-        self.conn.request("GET", f"/api/ipam/vlans/{vlan_group_id}vid={dup_vlan}", headers=self.headers)
-        response = self.conn.getresponse()
-        r = json.loads(response.read().decode('utf-8'))
-        choosing_vlan = True
-        while choosing_vlan:
-            counter = 1
-            head = ["#", "Name", "Vlan ID", "Vlan Description", "Group", "Region"]
-            data = []
-            counter = 0
-            available_vlan = r['results']
-
-            for result in available_vlan:
-                counter += 1
-                data.append([counter, result['name'], result['vid'], result['description'], result['group']['name'], self.region_name])
-            
-            self._print_table("Multiple VLANS", head=head, data=data)
-            if self.auto_update or (self.interactive and input("Update IPAM? [y/N]: ").lower() == "y"):
-                choice = input(f"Which VLAN do you want to use? [1-{counter}]")
-                try:
-                    choice = int(choice)
-                    isNumber = True
-                except:
-                    print("Invalid choice, not a number, please try again.")
-                    isNumber = False
-                    counter = 1
-                if isNumber and (choice >= 1 and choice <= counter):
-                    vlan = available_vlan[choice-1]
-                    choosing_vlan = False
-
-                    for vl in available_vlan:
-                        if vl is not vlan:
-                            self.ipam_vlan.remove({"id": vlan['id'], "vid": vlan['vid']})
-                            self.ipam_vlan_id.remove(vl["id"])
-            else:
-                choosing_vlan = False
 
         
     def _get_vlanid(self, vlan_vid):
         '''
         Fetch the ID of a VLAN ID.
         '''
-        vlan_group_id = self._get_vlan_group_id()
-
-        params = vlan_group_id
+        params = f"?available_on_device={self.device_id}"
         for vid in vlan_vid:
-            params = params + f"vid={vid}&"
+            params = params + f"&vid={vid}"
         self.conn.request("GET", f"/api/ipam/vlans/{params}", headers=self.headers)
         response = self.conn.getresponse()
-        r = json.loads(response.read().decode('utf-8'))
-        self.conn.close()
+        response_r = response.read()
+        if response_r:
+            r = json.loads(response_r.decode('utf-8'))
+            self.conn.close()
+        else:
+            print(f"{Colors.FAIL}Vlan(s): {vlan_vid}, is not available on this device in IPAM{Colors.ENDC}")
+            return []
 
         
         if response.code != 200:
-            print(f"{Colors.FAIL} Connection failed. Code: {response.code}. Reason: {response.reason}{Colors.ENDC}")
+            print(f"{Colors.FAIL} Connection failed. Code: {r.code}. Reason: {r.reason}{Colors.ENDC}")
+        
         vlans = r['results']
-        self.ipam_vlan_id = []
-        self.ipam_vid = []
-        self.ipam_vlan = []
+        ipam_vlan_id = []
+        ipam_vid = []
+        ipam_vlan = []
+        missing_vlan = []
 
         for v in vlans:
-            self.ipam_vlan.append({"id": v['id'], "vid": v['vid']})
-            self.ipam_vlan_id.append(v["id"])
-            self.ipam_vid.append(v["vid"])
-
-        if len(self.ipam_vid) != len(set(self.ipam_vid)): # Checks if there are duplicates in the vid list
-            duplicates = list(set([x for x in self.ipam_vid if self.ipam_vid.count(x) > 1]))
-            print(f"\n{Colors.WARNING}Duplicate VLAN IDs {duplicates} found in the same region in IPAM...{Colors.ENDC}")
-            if len(duplicates) > 1:
-                for dup in duplicates:
-                    self._clarify_duplicate_vlans(vlan_group_id=vlan_group_id, dup_vlan=dup)
-            elif len(duplicates) == 1:
-                self._clarify_duplicate_vlans(vlan_group_id=vlan_group_id, dup_vlan=duplicates[0])
-                
-            else:
-                print(f"{Colors.FAIL}Failed to give the user to choose which duplicate to used. Removing vlan {duplicates} from patch{Colors.ENDC}")
-            
+            ipam_vlan.append({"id": v['id'], "vid": v['vid']})
+            ipam_vlan_id.append(v["id"])
+            ipam_vid.append(v["vid"])
 
         for v in vlan_vid:
-            if  int(v) not in self.ipam_vid:
-                print(f"VLAN{v} not found in IPAM")
-                if (self.auto_update or (self.interactive and input(f"Do you want to create VLAN{v} in IPAM? [y/N]: ").lower() == "y")):
-                    created_vlan = self._create_vlan(v)
-                    self.ipam_vlan_id.append(created_vlan["id"])
-                    self.ipam_vid.append(created_vlan["vid"])
-                    for v in vlans:
-                        self.ipam_vlan_id.append(v["id"])
-                        self.ipam_vid.append(v["vid"])
-
-        return self.ipam_vlan_id
+            if (not v in ipam_vid):
+                missing_vlan.append(v)
+        return ipam_vlan_id, missing_vlan
 
 
     def _iterate_interfaces(self):
@@ -750,7 +561,12 @@ class CiscoDevice:
         Checks and updates the VLANS on interface
         '''
         config_tagged_vlans = [int(v.strip('T')) for v in config_intf.vlan if v.endswith('T')]
-        config_untagged_vlan = next((int(v.strip('U')) for v in config_intf.vlan if v.endswith('U')), None)
+        try:
+            config_untagged_vlan = next((int(v.strip('U')) for v in config_intf.vlan if v.endswith('U')), None)
+        except:
+            print(f"{Colors.FAIL}Multiple Vlan {str(config_intf.vlan).replace('U','')} on a access port({config_intf.name}) detected!{Colors.ENDC}")
+            config_untagged_vlan = []
+
         ipam_tagged_vlans = [v['vid'] for v in ipam_intf.get('tagged_vlans', [])]
         ipam_untagged_vlan = ipam_intf.get('untagged_vlan')
 
@@ -759,32 +575,56 @@ class CiscoDevice:
                 ipam_untagged_vlan = {}
                 ipam_untagged_vlan['vid'] = ""
             if config_untagged_vlan != ipam_untagged_vlan['vid']:
-                vid = self._get_vlanid([config_untagged_vlan])
+                vid, missing_vlan = self._get_vlanid([config_untagged_vlan])
                 if len(vid) == 1:
-                    self._handle_conflict(
-                        title="Untagged VLAN mismatch",
-                        intf=ipam_intf,
-                        ipam_value=ipam_untagged_vlan['vid'],
-                        config_value=config_untagged_vlan,
+                    head = ["Host", "Interface", "Config", "IPAM"]
+                    data = [[self.hostname, ipam_intf['name'], config_untagged_vlan, ipam_untagged_vlan['vid']]]
+                    self._print_table(title="Untagged VLAN mismatch", head=head, data=data)
+                    if not missing_vlan and (self.auto_update or (self.interactive and input("Update IPAM? [y/N]: ").lower() == "y")):
                         patch_data={"mode": "access", "untagged_vlan": {"id": vid[0]}}
-                    )
-                elif len(vid):
-                    pass
+                        self._patch_interface(ipam_intf['id'], json.dumps(patch_data))
+                        print("\n")
+
+                    if missing_vlan: 
+                        print(f"{Colors.FAIL}Vlan {missing_vlan} not found in IPAM or not available for device id {self.device_id}{Colors.ENDC}")
+                        if self.auto_update or (self.interactive and input("Update IPAM with other available VLANs? [y/N]: ").lower() == "y"):
+                            patch_data={"mode": "access", "untagged_vlan": {"id": vid[0]}}
+                            self._patch_interface(ipam_intf['id'], json.dumps(patch_data))
+                            print("\n")
+                elif len(vid) == 0:
+                    head = ["Host", "Interface", "Config", "IPAM"]
+                    data = [[self.hostname, ipam_intf['name'], config_untagged_vlan, ipam_untagged_vlan['vid']]]
+                    self._print_table(title="Untagged VLAN mismatch", head=head, data=data)
+                    print(f"{Colors.FAIL}Vlan {config_untagged_vlan} not found in IPAM or not available for device id {self.device_id}{Colors.ENDC}")
+                    
+                else:
+                    print(f"{Colors.FAIL}Something wrong happened. Multiple Untagged Vlan on a single port detected!{Colors.ENDC}")
         elif config_tagged_vlans:
             if set(config_tagged_vlans) != set(ipam_tagged_vlans):
-                # Can not use _handle_conflict since it will try create new vlan before showing diff to user.
                 title="Tagged VLAN mismatch"
                 intf=ipam_intf
                 ipam_value=ipam_tagged_vlans
                 config_value=config_tagged_vlans
-                head = ["Host", "Interface", "Config", "IPAM"]
-                data = [[self.hostname, intf['name'], config_value, ipam_value]]
-                self._print_table(title=title, head=head, data=data)
-                patch_data={"mode": "tagged", "tagged_vlans": self._get_vlanid(config_tagged_vlans)}
-                if self.auto_update or (self.interactive and input("Update IPAM? [y/N]: ").lower() == "y"):
-                    self._patch_interface(intf['id'], json.dumps(patch_data))
-                    print("\n")
-
+                vlans, missing_vlan = self._get_vlanid(config_tagged_vlans)
+                if vlans:
+                    head = ["Host", "Interface", "Config", "IPAM"]
+                    data = [[self.hostname, intf['name'], config_value, ipam_value]]
+                    self._print_table(title=title, head=head, data=data)
+                    if not missing_vlan and (self.auto_update or (self.interactive and input("Update IPAM? [y/N]: ").lower() == "y")):
+                        patch_data={"mode": "tagged", "tagged_vlans": vlans}
+                        self._patch_interface(intf['id'], json.dumps(patch_data))
+                        print("\n")
+                    if missing_vlan:
+                        print(f"{Colors.FAIL}Vlan {missing_vlan} not found in IPAM or not available for device id {self.device_id}{Colors.ENDC}")
+                        if self.auto_update or (self.interactive and input("Update IPAM with other available VLANs? [y/N]: ").lower() == "y"):
+                            patch_data={"mode": "tagged", "tagged_vlans": vlans}
+                            self._patch_interface(intf['id'], json.dumps(patch_data))
+                            print("\n")
+                else:
+                    head = ["Host", "Interface", "Config", "IPAM"]
+                    data = [[self.hostname, intf['name'], config_value, ipam_value]]
+                    self._print_table(title=title, head=head, data=data)
+                    
         else:
             if not (ipam_tagged_vlans == config_tagged_vlans):
                 self._handle_conflict(
