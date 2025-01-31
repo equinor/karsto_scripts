@@ -66,8 +66,10 @@ for n in nodes:
             # print(data)
             data = json.loads(data)
             if data["count"] < 1:
-                print("Not found in IPAM", n["ip"], n["label"],
-                      n["mac_address"], n["mac_vendor"], n["vlan_id"], n["type"], n["last_activity_time"], n["protocols"])
+                print("Not found in IPAM", n["ip"], "| label:", n["label"],
+                      "| mac:", n["mac_address"], "| vendor:",  n["mac_vendor"],
+                      "| vlan:", n["vlan_id"],"| type:", n["type"],"| activity:",
+                      n["last_activity_time"], "| protocols:", n["protocols"])
             else:
                 if len(n["label"]) > 0:
                     names = []
