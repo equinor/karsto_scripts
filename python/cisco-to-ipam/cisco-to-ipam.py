@@ -52,7 +52,7 @@ class CiscoDevice:
         Initializes CiscoDevice object
         '''
         self.config_path = config_path
-        self.conn = http.client.HTTPConnection(netbox_url)
+        self.conn = http.client.HTTPSConnection(netbox_url)
         
         self.netbox_token = netbox_token
         self.auto_update = auto_update
@@ -705,7 +705,6 @@ def main():
     parser.add_argument(
         "-c", "--config",
         help="The path of config file(s)",
-        nargs='+',
         required=True
     )
     parser.add_argument(
@@ -740,30 +739,20 @@ def main():
 
     args = parser.parse_args()
 
-    for conf_file in args.config:
+    config_files = glob.glob(args.config)
+    for conf_file in config_files:
         path = Path(conf_file)
         if not path.is_file():
             print(f"Error: {conf_file} is not a valid file or does not exist.")
             return
 
-    if len(args.config) == 1:
-        device = CiscoDevice(config_path=args.config[0], netbox_url=args.url, 
-                        netbox_token=args.token, auto_update=args.autoupdate,
-                        interactive=args.interactive)
+    devices = [CiscoDevice(config_path=conf_file, netbox_url=args.url, netbox_token=args.token, auto_update=args.autoupdate, interactive=args.interactive) for conf_file in config_files]
+    for device in devices:
         device.parse_config()
         if args.verbose:
             device.print_summary()
 
         device.compare_netbox()
-
-    else:
-        devices = [CiscoDevice(config_path=conf_file, netbox_url=args.url, netbox_token=args.token, auto_update=args.autoupdate, interactive=args.interactive) for conf_file in args.config]
-        for device in devices:
-            device.parse_config()
-            if args.verbose:
-                device.print_summary()
-
-            device.compare_netbox()
 
 
 if __name__ == "__main__":
@@ -790,7 +779,7 @@ if __name__ == "__main__":
         import urllib.request
         import urllib.parse
         import urllib.error
-        import argparse
+        import argparse, glob
         import traceback
         from pathlib import Path
         import re
