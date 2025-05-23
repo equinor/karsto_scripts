@@ -1,4 +1,5 @@
 import http.client
+import sys
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -30,6 +31,8 @@ def main():
     # Exported QR codes list from HiVision
     qr_code_path = args.qrs
 
+    ### Get ports from HiVision export
+    print("Getting ports", file=sys.stderr)
     ports = {}
     with open(file=ports_path, mode='r') as file:
         firstline = True
@@ -53,6 +56,8 @@ def main():
 
             ports[ipam_port["Device"]].append(ipam_port.copy())
 
+    ### Get devices from HiVision export
+    print("Getting devices", file=sys.stderr)
     devices = {}
     with open(file=devices_path, mode='r') as file:
         firstline = True
@@ -74,6 +79,64 @@ def main():
             devices[device["IP Address"]] = device.copy()
             devices[device["IP Address"]]["QR Code"] = None
 
+    ### Get all devices from IPAM
+    print("Getting devices from IPAM ", file=sys.stderr, end="")
+    ipam_devices = {}
+    conn = http.client.HTTPSConnection('karsto-ipam.equinor.com')
+    headers = {
+        # Request headers
+        'Authorization': f'Token {token}',
+        'accept': 'application/json',
+    }
+    next = 'https://karsto-ipam.equinor.com/api/dcim/devices/?limit=500'
+
+    while next:
+        print("#", file=sys.stderr, end="", flush=True)
+        conn.request("GET", next, None, headers)
+        response = conn.getresponse()
+        if response.code != 200:
+            print(
+                f'Connection failed. Code: {response.code}, Reason: {response.reason}')
+            quit()
+
+        data = response.read().decode('utf-8')
+        data = json.loads(data)
+
+        for d in data['results']:
+            ipam_devices[d['name']] = d
+        next = data['next']
+
+    print()
+    ### Get all devices types from IPAM
+    print("Getting device types from IPAM ", file=sys.stderr, end="")
+    ipam_device_types = {}
+    conn = http.client.HTTPSConnection('karsto-ipam.equinor.com')
+    headers = {
+        # Request headers
+        'Authorization': f'Token {token}',
+        'accept': 'application/json',
+    }
+    next = 'https://karsto-ipam.equinor.com/api/dcim/device-types/?limit=500'
+
+    while next:
+        print("#", file=sys.stderr, end="", flush=True)
+        conn.request("GET", next, None, headers)
+        response = conn.getresponse()
+        if response.code != 200:
+            print(
+                f'Connection failed. Code: {response.code}, Reason: {response.reason}')
+            quit()
+
+        data = response.read().decode('utf-8')
+        data = json.loads(data)
+
+        for d in data['results']:
+            ipam_device_types[d['id']] = d
+        next = data['next']
+
+
+
+    ### Get QR codes from HiVision export
     with open(file=qr_code_path, mode='r') as file:
         firstline = True
         keys = []
@@ -105,47 +168,19 @@ def main():
     for d in devices:
         device_name = devices[d]["System Name"]
 
-        try:
-            params = urllib.parse.urlencode({
-                'name': device_name
-            })
-            conn.request("GET", f"/api/dcim/devices/?{params}", None, headers)
-            response = conn.getresponse()
-            if response.code != 200:
-                print(
-                    f'Connection failed. Code: {response.code}, Reason: {response.reason}')
-                quit()
-            ipam_device = json.loads(response.read().decode('utf-8'))
-            if (ipam_device["count"] < 1):
-                print("Device not found in IPAM:", device_name)
-                continue
+        if (not device_name in ipam_devices.keys()):
+            print("Device not found in IPAM:", device_name)
+            continue
 
-            ipam_device = ipam_device["results"][0]
-
-            params = urllib.parse.urlencode({
-                'id': ipam_device["device_type"]["id"]
-            })
-            conn.request("GET", f"/api/dcim/device-types/?{params}", None, headers)
-            response = conn.getresponse()
-            if response.code != 200:
-                print(
-                    f'Connection failed. Code: {response.code}, Reason: {response.reason}')
-                quit()
-            ipam_device_type = json.loads(response.read().decode('utf-8'))["results"][0]
-
-            conn.close()
-        except Exception as e:
-            print("Exception", device_name, e)
-
-
+        ipam_device = ipam_devices[device_name]
         if (not ipam_device["rack"]):
             print(f'{device_name}: un-racked "{devices[d]["Location"]}"')
         elif (ipam_device["rack"] and devices[d]["Location"].find(ipam_device["rack"]["name"]) < 0):
             print(f'{device_name}: rack "{devices[d]["Location"]}" != "{ipam_device["rack"]["name"]}"')
             #if (autoupdate or (interactive and input("Update IPAM? (y,N) ").lower() == 'y')):
 
-        if (devices[d]["QR Code"] != ipam_device_type["part_number"]):
-            print(f'{device_name}: part number "{devices[d]["QR Code"]}" != "{ipam_device_type["part_number"]}"')
+        if (devices[d]["QR Code"] != ipam_device_types[ipam_device["device_type"]["id"]]["part_number"]):
+            print(f'{device_name}: part number "{devices[d]["QR Code"]}" != "{ipam_device_types[ipam_device["device_type"]["id"]]["part_number"]}"')
 
 
 
